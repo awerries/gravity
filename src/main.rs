@@ -5,11 +5,11 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 // http://arborjs.org/docs/barnes-hut
 const WINDOW_SIZE: f32 = 1200.;
-const THETA_THRESHOLD: f32 = 0.5;
+const THETA_THRESHOLD: f32 = 0.3;
 const PARTICLE_MASS: f32 = 1e7;
 const GRAVITY: f32 = 6.6743e-11; // m^3 / (kg s^2)
 const DSCALE: f32 = 1000.; // distance scaling
-const SIM_SPEED: f32 = 10.0;
+const SIM_SPEED: f32 = 1.0;
 const NUM_PARTICLES: u32 = 20000;
 
 const INIT_VEL_FACTOR: f32 = 4.; // arbitrary scalar on num_particles to limit initial velocity
