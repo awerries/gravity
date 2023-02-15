@@ -5,15 +5,16 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 // http://arborjs.org/docs/barnes-hut
 const WINDOW_SIZE: f32 = 1200.;
-const THETA_THRESHOLD: f32 = 1.0;
-const PARTICLE_MASS: f32 = 1e8;
+const THETA_THRESHOLD: f32 = 0.5;
+const PARTICLE_MASS: f32 = 1e7;
 const GRAVITY: f32 = 6.6743e-11; // m^3 / (kg s^2)
+const DSCALE: f32 = 1000.; // distance scaling
 const SIM_SPEED: f32 = 10.0;
 const NUM_PARTICLES: u32 = 20000;
 
-const INIT_VEL_FACTOR: f32 = 2.; // arbitrary scalar on num_particles to limit initial velocity
-const VEL_VARIATION: f32 = 0.1;
-const MIN_DIST: f32 = 0.1;
+const INIT_VEL_FACTOR: f32 = 4.; // arbitrary scalar on num_particles to limit initial velocity
+const VEL_VARIATION: f32 = 0.3;
+const MIN_DIST: f32 = 0.5;
 
 fn main() {
     App::new()
@@ -47,7 +48,7 @@ fn setup(
     commands.spawn(Camera2dBundle::default());
 
     for _ in 0..NUM_PARTICLES {
-        let (r, theta, pos) = random_pos(window.width()/ 2.0);
+        let (r, theta, pos) = random_pos(window.width());
         spawn_particle(&mut commands, &mut meshes, &mut materials, pos, random_vel(r, theta));
     }
 }
@@ -56,8 +57,7 @@ fn random_pos(width: f32) -> (f32, f32, Vec3)
 {
     let mut rng = rand::thread_rng();
     let dist = Uniform::new(0., 1.);
-    let half = width / 2.;
-    let r = half * rng.sample(dist);
+    let r = (width / 2.0 * rng.sample(dist)).sqrt()*4.;
     let theta = rng.sample(dist) * 2. * 3.1415927;
     (r, theta, Vec3::new(r*theta.cos(), r*theta.sin(), 0.))
 }
@@ -94,8 +94,7 @@ fn spawn_particle(
 
 fn update(
     windows: Res<Windows>,
-    time: Res<Time>,
-    mut commands: Commands,
+    par_commands: ParallelCommands,
     mut particle_query: Query<(&mut Transform, Entity, &mut Velocity, &mut Force)>
 ) {
     let window = windows.get_primary().unwrap();
@@ -107,11 +106,11 @@ fn update(
     }
 
     // update the position of each particle
-    for (mut transform, particle, mut velocity, mut force) in &mut particle_query {
+    particle_query.par_for_each_mut(NUM_PARTICLES as usize / 64, |(mut transform, particle, mut velocity, mut force)| {
         // TODO avoid recreating Body in each loop
         **force = tree.get_force(&Body::new(transform.translation.truncate(), particle));
         let accel = **force / PARTICLE_MASS;
-        let t = time.delta_seconds() * SIM_SPEED;
+        let t = SIM_SPEED;
         transform.translation.x += velocity.x*t + 0.5 * accel.x * t * t;
         transform.translation.y += velocity.y*t + 0.5 * accel.y * t * t;
         velocity.x += accel.x * t;
@@ -119,9 +118,11 @@ fn update(
 
         // despawn particles that go out of bounds (The other option is to crash! :P or simulate far outside of bounds so they can come back)
         if (transform.translation.x.abs() >= window.width() / 2.0) || (transform.translation.y.abs() >= window.width() / 2.0) {
-            commands.entity(particle).despawn();
+            par_commands.command_scope(|mut commands| {
+                commands.entity(particle).despawn();
+            });
         }
-    }
+    });
 }
 
 #[derive(Component, Deref, DerefMut, Reflect)]
