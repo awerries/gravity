@@ -1,26 +1,57 @@
 use rand::Rng;
 use rand::distributions::Uniform;
-use bevy::{prelude::*, sprite::MaterialMesh2dBundle, window::PresentMode};
+use bevy::{
+    prelude::*,
+    sprite::MaterialMesh2dBundle,
+    window::PresentMode,
+    time::FixedTimestep
+};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use random_color;
+use random_color::RandomColor;
+
+const WINDOW_SIZE: f32 = 1200.;
 
 // http://arborjs.org/docs/barnes-hut
-const WINDOW_SIZE: f32 = 1200.;
-const THETA_THRESHOLD: f32 = 0.3;
-const PARTICLE_MASS: f32 = 1e7;
-const GRAVITY: f32 = 6.6743e-11; // m^3 / (kg s^2)
-const DSCALE: f32 = 1000.; // distance scaling
-const SIM_SPEED: f32 = 1.0;
-const NUM_PARTICLES: u32 = 20000;
+const THETA_THRESHOLD: f32 = 1.5;
 
-const INIT_VEL_FACTOR: f32 = 4.; // arbitrary scalar on num_particles to limit initial velocity
-const VEL_VARIATION: f32 = 0.3;
-const MIN_DIST: f32 = 0.5;
+const GRAVITY: f32 = 6.6743e-11; // m^3 / (kg s^2)
+const DSCALE: f32 = 1_000.; // distance scaling w.r.t. meters
+const SIM_STEP: f32 = 1.0; // time of each sim step, in seconds
+
+const FPS: f32 = 30.0;
+const TIME_STEP: f32 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
+
+const NUM_PARTICLES: u32 = 20000;
+const AVG_PARTICLE_MASS: f32 = 1e13;
+const PARTICLE_MAG_VARIATION: f32 = 1.1;
+
+const VEL_VARIATION: f32 = 0.2;
+const GALAXY_WIDTH_SCALE: f32 = 0.8;
+const GALAXY_HEIGHT_SCALE: f32 = 1.0;
+
+// Minimum radius to guard against gravity singularity
+const MIN_R: f32 = 0.01 * DSCALE;
+const MIN_R2: f32 = MIN_R*MIN_R;
+
+// Min grid size to protect against floating point division errors
+const QUADRANT_SCALE: f32 = 2.0;
+const MIN_QUADRANT_LENGTH: f32 = MIN_R * QUADRANT_SCALE;
+
+
+#[derive(Component)]
+struct Pose {
+    r: Vec2,
+    v: Vec2
+}
+
+#[derive(Component)]
+struct Mass(f32);
+
 
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0., 0., 0.)))
-        .register_type::<Velocity>()
-        .register_type::<Force>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             window: WindowDescriptor {
                 title: "gravity_sim".to_string(),
@@ -33,7 +64,11 @@ fn main() {
         }))
         //.add_plugin(WorldInspectorPlugin)
         .add_startup_system(setup)
-        .add_system(update)
+        .add_system_set(
+            SystemSet::new()
+            .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+            .with_system(update)
+        )
         .add_system(bevy::window::close_on_esc)
         .run();
 }
@@ -47,29 +82,8 @@ fn setup(
     let window = windows.get_primary().unwrap();
     commands.spawn(Camera2dBundle::default());
 
-    for _ in 0..NUM_PARTICLES {
-        let (r, theta, pos) = random_pos(window.width());
-        spawn_particle(&mut commands, &mut meshes, &mut materials, pos, random_vel(r, theta));
-    }
-}
-
-fn random_pos(width: f32) -> (f32, f32, Vec3)
-{
-    let mut rng = rand::thread_rng();
-    let dist = Uniform::new(0., 1.);
-    let r = (width / 2.0 * rng.sample(dist)).sqrt()*4.;
-    let theta = rng.sample(dist) * 2. * 3.1415927;
-    (r, theta, Vec3::new(r*theta.cos(), r*theta.sin(), 0.))
-}
-
-fn random_vel(r: f32, theta: f32) -> Vec2
-{
-    let mut rng = rand::thread_rng();
-    let v_orbit = (GRAVITY * PARTICLE_MASS * (NUM_PARTICLES as f32) / INIT_VEL_FACTOR / r).sqrt();
-
-    let v = v_orbit + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION);
-
-    Vec2::new(v*theta.sin(), -v*theta.cos())
+    spawn_galaxy(&mut commands, &mut meshes, &mut materials, window.width() * GALAXY_WIDTH_SCALE);
+    //spawn_grid(&mut commands, &mut meshes, &mut materials, window.width()/ 1.1);
 }
 
 
@@ -80,44 +94,83 @@ fn spawn_particle(
     pos: Vec3,
     vel: Vec2,
 ) {
+    let color = RandomColor::new().hue(random_color::Color::Blue).to_rgb_array();
+    let mut rng = rand::thread_rng();
+    let mdist = Uniform::new(AVG_PARTICLE_MASS / PARTICLE_MAG_VARIATION, AVG_PARTICLE_MASS * PARTICLE_MAG_VARIATION);
     commands.spawn((
         MaterialMesh2dBundle {
-            mesh: meshes.add(shape::Circle::new(1.).into()).into(),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
+            mesh: meshes.add(shape::Circle::new(1.0).into()).into(),
+            material: materials.add(ColorMaterial::from(Color::rgb_u8(color[0], color[1], color[2]))),
             transform: Transform::from_translation(pos),
             ..default()
         },
-        Velocity(vel),
-        Force(Vec2::new(0., 0.))
+        Pose {r: pos.truncate() * DSCALE, v: vel},
+        Mass(rng.sample(mdist))
     ));
+}
+
+fn spawn_galaxy(
+    mut commands: &mut Commands,
+    mut meshes: &mut ResMut<Assets<Mesh>>,
+    mut materials: &mut ResMut<Assets<ColorMaterial>>,
+    diameter: f32
+) {
+    for _ in 0..NUM_PARTICLES {
+        let (r, theta, pos) = random_circle_pos(diameter);
+        let vel = random_orbital_circle_vel(r * DSCALE, theta, DSCALE*diameter*GALAXY_HEIGHT_SCALE);
+        //let vel = Vec2::new(0., 0.);
+        spawn_particle(&mut commands, &mut meshes, &mut materials, pos, vel);
+    }
+}
+
+fn random_circle_pos(diameter: f32) -> (f32, f32, Vec3)
+{
+    let mut rng = rand::thread_rng();
+    let dist = Uniform::new(0., 1.);
+    let r = diameter / 2.0 * rng.sample(dist);
+    let theta = rng.sample(dist) * 2. * 3.1415927;
+    (r, theta, Vec3::new(r*theta.cos(), r*theta.sin(), 0.))
+}
+
+fn random_orbital_circle_vel(r: f32, theta: f32, scale_height: f32) -> Vec2
+{
+    let mut rng = rand::thread_rng();
+    let grav = GRAVITY * AVG_PARTICLE_MASS * (NUM_PARTICLES as f32) / (r * r + scale_height * scale_height).sqrt();
+    let v_orbit = (2.0 * grav).sqrt();
+    let v = v_orbit + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION);
+    Vec2::new(v*theta.sin(), -v*theta.cos())
 }
 
 fn update(
     windows: Res<Windows>,
     par_commands: ParallelCommands,
-    mut particle_query: Query<(&mut Transform, Entity, &mut Velocity, &mut Force)>
+    mut particle_query: Query<(&mut Transform, Entity, &mut Pose, &Mass)>
 ) {
     let window = windows.get_primary().unwrap();
 
     // each cycle, we build the quad-tree out of the particles
-    let mut tree = BHTree::new(Quadrant {length: window.width(), corner: Vec2::new(-window.width()/2., -window.width()/2.)});
-    for (transform, particle, _, _) in &particle_query {
-        tree.insert(Body::new(transform.translation.truncate(), particle))
+    let mut tree = BHTree::new(Quadrant::new(window.width() * DSCALE));
+    for (transform, particle, _, mass) in &particle_query {
+        tree.insert(Body::new(mass, transform.translation.truncate() * DSCALE, particle))
     }
 
     // update the position of each particle
-    particle_query.par_for_each_mut(NUM_PARTICLES as usize / 64, |(mut transform, particle, mut velocity, mut force)| {
+    particle_query.par_for_each_mut(NUM_PARTICLES as usize / 1024, |(mut transform, particle, mut pose, mass)| {
+        let Mass(mass_f) = *mass;
         // TODO avoid recreating Body in each loop
-        **force = tree.get_force(&Body::new(transform.translation.truncate(), particle));
-        let accel = **force / PARTICLE_MASS;
-        let t = SIM_SPEED;
-        transform.translation.x += velocity.x*t + 0.5 * accel.x * t * t;
-        transform.translation.y += velocity.y*t + 0.5 * accel.y * t * t;
-        velocity.x += accel.x * t;
-        velocity.y += accel.y * t;
+        let accel = tree.get_force(&Body::new(mass, pose.r, particle)) / mass_f;
+        let t = SIM_STEP;
+        let v_i = pose.v;
+        let dv = accel * t;
+        pose.r += (v_i + 0.5 * dv) * t;
+        pose.v += dv;
+
+        // set actual rendering position
+        transform.translation.x = pose.r.x / DSCALE;
+        transform.translation.y = pose.r.y / DSCALE;
 
         // despawn particles that go out of bounds (The other option is to crash! :P or simulate far outside of bounds so they can come back)
-        if (transform.translation.x.abs() >= window.width() / 2.0) || (transform.translation.y.abs() >= window.width() / 2.0) {
+        if (transform.translation.x.abs() >= window.width() / 2.0 - 1.0) || (transform.translation.y.abs() >= window.width() / 2.0 - 1.0) {
             par_commands.command_scope(|mut commands| {
                 commands.entity(particle).despawn();
             });
@@ -125,83 +178,41 @@ fn update(
     });
 }
 
-#[derive(Component, Deref, DerefMut, Reflect)]
-struct Velocity(Vec2);
 
-#[derive(Component, Deref, DerefMut, Reflect)]
-struct Force(Vec2);
+enum Corner {NW, NE, SW, SE}
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Quadrant {
-    corner: Vec2,
-    length: f32
+    center: Vec2,
+    len: f32 // half-length
 }
 
 impl Quadrant {
+    fn new(length: f32) -> Self {
+        Quadrant {
+            len: length,
+            center: Vec2::new(0., 0.)
+        }
+    }
     /// return true if this Quadrant contains (x,y)
     fn contains(&self, x: f32, y: f32) -> bool {
-        (x >= self.corner.x) && (x < self.corner.x + self.length) && (y >= self.corner.y) && (y < self.corner.y + self.length)
+        let hl = self.len / 2.0;
+        let e = f32::EPSILON; // ensure that we don't have floating point grid gaps
+        (x >= self.center.x - hl) && (x < self.center.x + hl + e) && (y >= self.center.y - hl ) && (y < self.center.y + hl + e)
     }
-    fn nw(&self) -> Self {
-        let half = self.length / 2.0;
-        Quadrant {corner: Vec2::new(self.corner.x, self.corner.y + half), length: half}
-    }
-    fn ne(&self) -> Self {
-        let half = self.length / 2.0;
-        Quadrant {corner: Vec2::new(self.corner.x + half, self.corner.y + half), length: half}
-    }
-    fn sw(&self) -> Self {
-        let half = self.length / 2.0;
-        Quadrant {corner: Vec2::new(self.corner.x, self.corner.y), length: half}
-    }
-    fn se(&self) -> Self {
-        let half = self.length / 2.0;
-        Quadrant {corner: Vec2::new(self.corner.x + half, self.corner.y), length: half}
-    }
-}
-
-#[derive(Default, Clone)]
-struct Body {
-    mass: f32,
-    pos: Vec2,
-    // if body has a particle entity, it's an external particle.
-    // if not, it's a collection of particles.
-    particle: Option<Entity>
-}
-
-impl Body {
-    fn new(pos: Vec2, particle: Entity) -> Self {
-        Body {
-            mass: PARTICLE_MASS,
-            pos,
-            particle: Some(particle)
-        }
-    }
-    fn within(&self, q: &Quadrant) -> bool {
-        q.contains(self.pos.x, self.pos.y)
-    }
-
-    fn add(&mut self, b: &Body) {
-        // get total mass, but don't set overall mass until after we update COM
-        let total_mass = self.mass + b.mass;
-        // update center of mass
-        self.pos.x = (self.pos.x*self.mass + b.pos.x*b.mass) / total_mass;
-        self.pos.y = (self.pos.y*self.mass + b.pos.y*b.mass) / total_mass;
-        self.mass = total_mass;
-    }
-
-    /// compute force on self from Body
-    fn force(&self, b: &Body) -> Vec2 {
-        let dist = b.pos.distance(self.pos);
-        // protect against tiny floating point values, otherwise we get insane acceleration without collision detection
-        if dist > MIN_DIST {
-            // F_vec = -G * M * r_vec / |r|^3
-            - GRAVITY * self.mass * b.mass * (self.pos - b.pos) / dist.powi(3)
-        } else {
-            Vec2::new(0., 0.)
+    
+    fn subquad(&self, corner: Corner) -> Self {
+        let hl = self.len / 2.0;
+        let ql = hl / 2.0;
+        match corner {
+            Corner::NW => Quadrant {center: Vec2::new(self.center.x - ql, self.center.y + ql), len: hl},
+            Corner::NE => Quadrant {center: Vec2::new(self.center.x + ql, self.center.y + ql), len: hl},
+            Corner::SW => Quadrant {center: Vec2::new(self.center.x - ql, self.center.y - ql), len: hl},
+            Corner::SE => Quadrant {center: Vec2::new(self.center.x + ql, self.center.y - ql), len: hl}
         }
     }
 }
+
 
 #[derive(Default)]
 struct BHTree
@@ -226,22 +237,29 @@ impl BHTree
 
     fn insert(&mut self, b: Body) {
         if let Some(current_body) = &mut self.body {
-            // We have a body, but does it have an particle or is it internal (and is therefore a group)?
+            // We have a body, but does it have an particle or is it a group?
             if current_body.particle.is_some() {
-                // this body is a particle, so we have two particles, so need to split this region
-                self.subtree = Some(SubQuadrants::new(&self.quad));
-                // copy all the fields, as we're moving the particle down a layer
-                let copy = current_body.clone();
-                // clear the actual particle, as this is now an internal node
-                current_body.particle = None;
-                // add the new particle to the now-internal node mass and COM
-                current_body.add(&b);
-                // add both particles as external nodes
-                self.insert_to_quadrant(copy);
-                self.insert_to_quadrant(b);
+                if self.quad.len > MIN_QUADRANT_LENGTH {
+                    // this body is a particle, and we only have 1 particle per region if over the min length, so we split and generate subtrees
+                    self.subtree = Some(SubQuadrants::new(&self.quad));
+                    // copy all the fields, as we're moving the particle down a layer
+                    let copy = current_body.clone();
+                    // clear the actual particle, as this is now an internal node
+                    current_body.particle = None;
+                    // add the new particle to the now-internal node mass and COM
+                    current_body.add(&b);
+
+                    // add both particles as external nodes
+                    let subtree = self.subtree.as_mut().unwrap();
+                    subtree.insert_to_quadrant(copy);
+                    subtree.insert_to_quadrant(b);
+                } else {
+                    // we've already got too small of a grid, just add the mass for a cheap estimate
+                    current_body.add(&b);
+                }
             } else {
                 current_body.add(&b);
-                self.insert_to_quadrant(b);
+                self.subtree.as_mut().unwrap().insert_to_quadrant(b);
             }
         } else {
             // current node has no body, add it here as particle/external
@@ -249,17 +267,7 @@ impl BHTree
         }
     }
 
-    fn insert_to_quadrant(&mut self, b: Body) {
-        // this is an internal node, we must have a subtree
-        let subtree = self.subtree.as_mut().unwrap();
-        match b {
-            b if b.within(&subtree.nw.quad) => subtree.nw.insert(b),
-            b if b.within(&subtree.ne.quad) => subtree.ne.insert(b),
-            b if b.within(&subtree.sw.quad) => subtree.sw.insert(b),
-            b if b.within(&subtree.se.quad) => subtree.se.insert(b),
-            b => panic!("position {}, {} was not in any quadrant?", b.pos.x, b.pos.y)
-        }
-    }
+
 
     fn get_force(&self, b: &Body) -> Vec2 {     
         if let Some(node_body) = &self.body {
@@ -273,7 +281,7 @@ impl BHTree
             } else {
                 // current node does not have a particle, but does have a body, and therefore must be an internal node
                 let dist = node_body.pos.distance(b.pos);
-                if self.quad.length / dist < THETA_THRESHOLD {
+                if self.quad.len / dist < THETA_THRESHOLD {
                     // treat node as a single body
                     b.force(node_body)
                 } else {
@@ -288,6 +296,7 @@ impl BHTree
     }
 }
 
+
 struct SubQuadrants {
     nw: Box<BHTree>,
     ne: Box<BHTree>,
@@ -298,14 +307,69 @@ struct SubQuadrants {
 impl SubQuadrants {
     fn new(q: &Quadrant) -> Self {
         SubQuadrants {
-            nw: Box::new(BHTree::new(q.nw())),
-            ne: Box::new(BHTree::new(q.ne())),
-            sw: Box::new(BHTree::new(q.sw())),
-            se: Box::new(BHTree::new(q.se())),
+            nw: Box::new(BHTree::new(q.subquad(Corner::NW))),
+            ne: Box::new(BHTree::new(q.subquad(Corner::NE))),
+            sw: Box::new(BHTree::new(q.subquad(Corner::SW))),
+            se: Box::new(BHTree::new(q.subquad(Corner::SE))),
         }
     }
 
     fn get_force(&self, b: &Body) -> Vec2 {
         self.nw.get_force(b) + self.ne.get_force(b) + self.sw.get_force(b) + self.se.get_force(b)
+    }
+
+    fn insert_to_quadrant(&mut self, b: Body) {
+        // this is an internal node, we must have a subtree
+        match b {
+            b if b.within(&self.nw.quad) => self.nw.insert(b),
+            b if b.within(&self.ne.quad) => self.ne.insert(b),
+            b if b.within(&self.sw.quad) => self.sw.insert(b),
+            b if b.within(&self.se.quad) => self.se.insert(b),
+            b => panic!("position {}, {} was not in any quadrant?\n {:#?}, {:#?}, {:#?}, {:#?}", b.pos.x, b.pos.y, self.nw.quad, self.ne.quad, self.sw.quad, self.se.quad)
+        }
+    }
+}
+
+
+#[derive(Default, Clone)]
+struct Body {
+    mass: f32,
+    pos: Vec2,
+    // if body has a particle entity, it's an external particle.
+    // if not, it's a collection of particles.
+    particle: Option<Entity>
+}
+
+impl Body {
+    fn new(mass: &Mass, pos: Vec2, particle: Entity) -> Self {
+        let Mass(mass) = mass;
+        Body {
+            mass: *mass,
+            pos,
+            particle: Some(particle)
+        }
+    }
+
+    fn within(&self, q: &Quadrant) -> bool {
+        q.contains(self.pos.x, self.pos.y)
+    }
+
+    fn add(&mut self, b: &Body) {
+        // get total mass, but don't set overall mass until after we update COM
+        let total_mass = self.mass + b.mass;
+        // update center of mass
+        self.pos.x = (self.pos.x*self.mass + b.pos.x*b.mass) / total_mass;
+        self.pos.y = (self.pos.y*self.mass + b.pos.y*b.mass) / total_mass;
+        self.mass = total_mass;
+    }
+
+    /// compute force on self from Body
+    fn force(&self, b: &Body) -> Vec2 {
+        let dist2 = b.pos.distance_squared(self.pos);
+        // protect against tiny floating point values, otherwise we get insane acceleration without collision detection
+        // Barnes. "Gravitational softening as a smoothing operation"
+        // https://home.ifa.hawaii.edu/users/barnes/research/smoothing/soft.pdf
+        // F_vec = -G * M * (r2-r1) / (|r2-r1|^2 + eps^2)^3/2
+        - GRAVITY * self.mass * b.mass * (self.pos - b.pos) / (dist2 + MIN_R2).powf(3./2.)
     }
 }
