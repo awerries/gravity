@@ -132,11 +132,10 @@ fn random_orbital_circle_vel(r: f32, theta: f32, scale_height: f32, total_mass: 
 {
     let mut rng = rand::thread_rng();
     let grav = GRAVITY * total_mass / (r * r + scale_height * scale_height).sqrt();
-    let v_orbit = (2.0 * grav).sqrt();
-    let v = v_orbit + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION);
+    let v = (2.0 * grav).sqrt();
     Vec2::new(
-        v*theta.sin() + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION),
-        -v*theta.cos() + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION)
+        v*theta.sin() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION),
+        -v*theta.cos() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION)
     )
 }
 
