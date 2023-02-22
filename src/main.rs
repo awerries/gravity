@@ -6,14 +6,13 @@ use bevy::{
     window::PresentMode,
     time::FixedTimestep
 };
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use random_color;
 use random_color::RandomColor;
 
 const WINDOW_SIZE: f32 = 1200.;
 
 // http://arborjs.org/docs/barnes-hut
-const THETA_THRESHOLD: f32 = 0.7;
+const THETA_THRESHOLD: f32 = 0.8;
 
 const GRAVITY: f32 = 6.6743e-11; // m^3 / (kg s^2)
 const DSCALE: f32 = 1_000.; // distance scaling w.r.t. meters
@@ -23,15 +22,15 @@ const FPS: f32 = 60.0;
 const TIME_STEP: f32 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
 
 const NUM_PARTICLES: u32 = 10000;
-const AVG_PARTICLE_MASS: f32 = 1e14;
-const PARTICLE_MAG_VARIATION: f32 = 10.;
+const AVG_PARTICLE_MASS: f32 = 1e15;
+const PARTICLE_MAG_VARIATION: f32 = 1.1;
 
-const VEL_VARIATION: f32 = 0.3;
+const VEL_VARIATION: f32 = 0.2;
 const GALAXY_WIDTH_SCALE: f32 = 0.2;
-const GALAXY_HEIGHT_SCALE: f32 = 1.0;
+const GALAXY_HEIGHT_SCALE: f32 = 1.15;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f32 = 0.1 * DSCALE;
+const MIN_R: f32 = 0.05 * DSCALE;
 const MIN_R2: f32 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
@@ -61,7 +60,6 @@ fn main() {
             },
             ..default()
         }))
-        //.add_plugin(WorldInspectorPlugin)
         .add_startup_system(setup)
         .add_system_set(
             SystemSet::new()
@@ -170,7 +168,7 @@ fn update(
 
     // each cycle, we build the quad-tree out of the particles
     let mut tree = BHTree::new(Quadrant::new(window.width() * DSCALE));
-    for (transform, particle, pose, mass) in &particle_query {
+    for (_, particle, pose, mass) in &particle_query {
         tree.insert(Body::new(mass, pose.r, particle))
     }
 
