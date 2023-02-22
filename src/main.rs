@@ -13,30 +13,29 @@ use random_color::RandomColor;
 const WINDOW_SIZE: f32 = 1200.;
 
 // http://arborjs.org/docs/barnes-hut
-const THETA_THRESHOLD: f32 = 1.5;
+const THETA_THRESHOLD: f32 = 0.7;
 
 const GRAVITY: f32 = 6.6743e-11; // m^3 / (kg s^2)
 const DSCALE: f32 = 1_000.; // distance scaling w.r.t. meters
 const SIM_STEP: f32 = 1.0; // time of each sim step, in seconds
 
-const FPS: f32 = 30.0;
+const FPS: f32 = 60.0;
 const TIME_STEP: f32 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
 
-const NUM_PARTICLES: u32 = 20000;
-const AVG_PARTICLE_MASS: f32 = 1e13;
-const PARTICLE_MAG_VARIATION: f32 = 1.1;
+const NUM_PARTICLES: u32 = 10000;
+const AVG_PARTICLE_MASS: f32 = 1e14;
+const PARTICLE_MAG_VARIATION: f32 = 10.;
 
-const VEL_VARIATION: f32 = 0.2;
-const GALAXY_WIDTH_SCALE: f32 = 0.8;
+const VEL_VARIATION: f32 = 0.3;
+const GALAXY_WIDTH_SCALE: f32 = 0.2;
 const GALAXY_HEIGHT_SCALE: f32 = 1.0;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f32 = 0.01 * DSCALE;
+const MIN_R: f32 = 0.1 * DSCALE;
 const MIN_R2: f32 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
-const QUADRANT_SCALE: f32 = 2.0;
-const MIN_QUADRANT_LENGTH: f32 = MIN_R * QUADRANT_SCALE;
+const MIN_QUADRANT_LENGTH: f32 = 0.02 * DSCALE;
 
 
 #[derive(Component)]
@@ -82,16 +81,70 @@ fn setup(
     let window = windows.get_primary().unwrap();
     commands.spawn(Camera2dBundle::default());
 
-    spawn_galaxy(&mut commands, &mut meshes, &mut materials, window.width() * GALAXY_WIDTH_SCALE);
-    //spawn_grid(&mut commands, &mut meshes, &mut materials, window.width()/ 1.1);
+    let w = window.width() * DSCALE;
+    spawn_galaxy(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        NUM_PARTICLES / 2,
+        w * GALAXY_WIDTH_SCALE,
+        Vec2::new(w / 10.0, w / 10.0),
+        Vec2::new(0., -DSCALE / 100.0)
+    );
+    spawn_galaxy(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        NUM_PARTICLES / 2,
+        w * GALAXY_WIDTH_SCALE,
+        Vec2::new(-w / 10.0, -w / 10.0),
+        Vec2::new(0., DSCALE / 100.0)
+    );
 }
 
+fn spawn_galaxy(
+    mut commands: &mut Commands,
+    mut meshes: &mut ResMut<Assets<Mesh>>,
+    mut materials: &mut ResMut<Assets<ColorMaterial>>,
+    num_particles: u32,
+    diameter: f32,
+    gpos: Vec2,
+    gvel: Vec2
+) {
+    let gmass = (num_particles as f32) * AVG_PARTICLE_MASS;
+    for _ in 0..num_particles {
+        let (r, theta, pos) = random_circle_pos(diameter);
+        let vel = random_orbital_circle_vel(r, theta, diameter*GALAXY_HEIGHT_SCALE, gmass);
+        spawn_particle(&mut commands, &mut meshes, &mut materials, pos + gpos, vel + gvel);
+    }
+}
+
+fn random_circle_pos(diameter: f32) -> (f32, f32, Vec2)
+{
+    let mut rng = rand::thread_rng();
+    let dist = Uniform::new(0., 1.);
+    let r = diameter / 2.0 * rng.sample(dist);
+    let theta = rng.sample(dist) * 2. * 3.1415927;
+    (r, theta, Vec2::new(r*theta.cos(), r*theta.sin()))
+}
+
+fn random_orbital_circle_vel(r: f32, theta: f32, scale_height: f32, total_mass: f32) -> Vec2
+{
+    let mut rng = rand::thread_rng();
+    let grav = GRAVITY * total_mass / (r * r + scale_height * scale_height).sqrt();
+    let v_orbit = (2.0 * grav).sqrt();
+    let v = v_orbit + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION);
+    Vec2::new(
+        v*theta.sin() + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION),
+        -v*theta.cos() + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION)
+    )
+}
 
 fn spawn_particle(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
-    pos: Vec3,
+    pos: Vec2,
     vel: Vec2,
 ) {
     let color = RandomColor::new().hue(random_color::Color::Blue).to_rgb_array();
@@ -101,44 +154,12 @@ fn spawn_particle(
         MaterialMesh2dBundle {
             mesh: meshes.add(shape::Circle::new(1.0).into()).into(),
             material: materials.add(ColorMaterial::from(Color::rgb_u8(color[0], color[1], color[2]))),
-            transform: Transform::from_translation(pos),
+            transform: Transform::from_translation(pos.extend(0.) / DSCALE),
             ..default()
         },
-        Pose {r: pos.truncate() * DSCALE, v: vel},
+        Pose {r: pos, v: vel},
         Mass(rng.sample(mdist))
     ));
-}
-
-fn spawn_galaxy(
-    mut commands: &mut Commands,
-    mut meshes: &mut ResMut<Assets<Mesh>>,
-    mut materials: &mut ResMut<Assets<ColorMaterial>>,
-    diameter: f32
-) {
-    for _ in 0..NUM_PARTICLES {
-        let (r, theta, pos) = random_circle_pos(diameter);
-        let vel = random_orbital_circle_vel(r * DSCALE, theta, DSCALE*diameter*GALAXY_HEIGHT_SCALE);
-        //let vel = Vec2::new(0., 0.);
-        spawn_particle(&mut commands, &mut meshes, &mut materials, pos, vel);
-    }
-}
-
-fn random_circle_pos(diameter: f32) -> (f32, f32, Vec3)
-{
-    let mut rng = rand::thread_rng();
-    let dist = Uniform::new(0., 1.);
-    let r = diameter / 2.0 * rng.sample(dist);
-    let theta = rng.sample(dist) * 2. * 3.1415927;
-    (r, theta, Vec3::new(r*theta.cos(), r*theta.sin(), 0.))
-}
-
-fn random_orbital_circle_vel(r: f32, theta: f32, scale_height: f32) -> Vec2
-{
-    let mut rng = rand::thread_rng();
-    let grav = GRAVITY * AVG_PARTICLE_MASS * (NUM_PARTICLES as f32) / (r * r + scale_height * scale_height).sqrt();
-    let v_orbit = (2.0 * grav).sqrt();
-    let v = v_orbit + v_orbit * rng.gen_range(-VEL_VARIATION..VEL_VARIATION);
-    Vec2::new(v*theta.sin(), -v*theta.cos())
 }
 
 fn update(
@@ -150,12 +171,12 @@ fn update(
 
     // each cycle, we build the quad-tree out of the particles
     let mut tree = BHTree::new(Quadrant::new(window.width() * DSCALE));
-    for (transform, particle, _, mass) in &particle_query {
-        tree.insert(Body::new(mass, transform.translation.truncate() * DSCALE, particle))
+    for (transform, particle, pose, mass) in &particle_query {
+        tree.insert(Body::new(mass, pose.r, particle))
     }
 
     // update the position of each particle
-    particle_query.par_for_each_mut(NUM_PARTICLES as usize / 1024, |(mut transform, particle, mut pose, mass)| {
+    particle_query.par_for_each_mut(128, |(mut transform, particle, mut pose, mass)| {
         let Mass(mass_f) = *mass;
         // TODO avoid recreating Body in each loop
         let accel = tree.get_force(&Body::new(mass, pose.r, particle)) / mass_f;
@@ -184,7 +205,7 @@ enum Corner {NW, NE, SW, SE}
 #[derive(Default, Debug)]
 struct Quadrant {
     center: Vec2,
-    len: f32 // half-length
+    len: f32
 }
 
 impl Quadrant {
@@ -197,8 +218,7 @@ impl Quadrant {
     /// return true if this Quadrant contains (x,y)
     fn contains(&self, x: f32, y: f32) -> bool {
         let hl = self.len / 2.0;
-        let e = f32::EPSILON; // ensure that we don't have floating point grid gaps
-        (x >= self.center.x - hl) && (x < self.center.x + hl + e) && (y >= self.center.y - hl ) && (y < self.center.y + hl + e)
+        (x >= self.center.x - hl) && (x < self.center.x + hl) && (y >= self.center.y - hl) && (y < self.center.y + hl)
     }
     
     fn subquad(&self, corner: Corner) -> Self {
