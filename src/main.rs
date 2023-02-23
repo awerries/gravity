@@ -14,29 +14,29 @@ const WINDOW_SIZE: f32 = 1200.;
 const OUT_OF_BOUNDS: f64 = 2.0; // track particles this far out of bounds
 
 // http://arborjs.org/docs/barnes-hut
-const THETA_THRESHOLD: f64 = 0.6;
+const THETA_THRESHOLD: f64 = 0.9;
 
 const GRAVITY: f64 = 6.6743e-11; // m^3 / (kg s^2)
-const DSCALE: f64 = 1_000_000.; // distance scaling w.r.t. meters
-const SIM_STEP: f64 = 100.0; // time of each sim step, in seconds
+const DSCALE: f64 = 1e18; // distance scaling w.r.t. pixels. average distance between stars in milky way is 5 light years, or 4.73e16 meters
+const SIM_STEP: f64 = 1e14; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
 
 const FPS: f64 = 30.0;
 const TIME_STEP: f64 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
 
 const NUM_PARTICLES: u32 = 10000;
-const AVG_PARTICLE_MASS: f64 = 1e19;
+const AVG_PARTICLE_MASS: f64 = 1e30; // mass of sun is around 2e30 kg
 const PARTICLE_MAG_VARIATION: f64 = 1.1;
 
 const VEL_VARIATION: f64 = 0.01;
-const GALAXY_WIDTH_SCALE: f64 = 0.2;
-const GALAXY_HEIGHT_SCALE: f64 = 2.0;
+const GALAXY_WIDTH_SCALE: f64 = 0.25;
+const GALAXY_HEIGHT_SCALE: f64 = 1.5;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f64 = 0.01 * DSCALE;
+const MIN_R: f64 = 0.025 * DSCALE;
 const MIN_R2: f64 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
-const MIN_QUADRANT_LENGTH: f64 = 0.00001 * DSCALE;
+const MIN_QUADRANT_LENGTH: f64 = 0.000001 * DSCALE;
 
 
 #[derive(Component)]
@@ -48,6 +48,11 @@ struct Pose {
 #[derive(Component)]
 struct Mass(f64);
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+enum AppState {
+    Running,
+    Paused,
+}
 
 fn main() {
     App::new()
@@ -62,14 +67,32 @@ fn main() {
             },
             ..default()
         }))
+        .add_state(AppState::Paused)
         .add_startup_system(setup)
         .add_system_set(
             SystemSet::new()
             .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
             .with_system(update)
         )
+        //.add_system_set(SystemSet::on_update(AppState::Running).with_system(update))
+        .add_system(detect_pause)
         .add_system(bevy::window::close_on_esc)
         .run();
+}
+
+fn detect_pause(mut app_state: ResMut<State<AppState>>, mut keys: ResMut<Input<KeyCode>>) {
+    if keys.just_pressed(KeyCode::Space) {
+        let current = app_state.current().clone();
+        app_state
+            .set(match current {
+                AppState::Running => AppState::Paused,
+                AppState::Paused => AppState::Running,
+            })
+            .unwrap();
+        // ^ this can fail if we are already in the target state
+        // or if another state change is already queued;
+        keys.reset(KeyCode::Space);
+    }
 }
 
 fn setup(
@@ -88,8 +111,8 @@ fn setup(
         &mut materials,
         NUM_PARTICLES / 2,
         w * GALAXY_WIDTH_SCALE,
-        DVec2::new(w / 10.0, w / 10.0),
-        DVec2::new(0., -DSCALE / 10000.0)
+        DVec2::new(w / 8.0, w / 8.0),
+        DVec2::new(0., -0.001)
     );
     spawn_galaxy(
         &mut commands,
@@ -97,8 +120,8 @@ fn setup(
         &mut materials,
         NUM_PARTICLES / 2,
         w * GALAXY_WIDTH_SCALE,
-        DVec2::new(-w / 10.0, -w / 10.0),
-        DVec2::new(0., DSCALE / 10000.0)
+        DVec2::new(-w / 8.0, -w / 8.0),
+        DVec2::new(0., 0.001)
     );
 }
 
