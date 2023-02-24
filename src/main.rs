@@ -6,47 +6,56 @@ use bevy::{
     window::PresentMode,
     time::FixedTimestep
 };
-use glam::DVec2;
+use glam::Vec2;
 use random_color;
 use random_color::RandomColor;
 
 const WINDOW_SIZE: f32 = 1200.;
-const OUT_OF_BOUNDS: f64 = 2.0; // track particles this far out of bounds
+const OUT_OF_BOUNDS: f32 = 2.0; // track particles this far out of bounds
 
 // http://arborjs.org/docs/barnes-hut
-const THETA_THRESHOLD: f64 = 0.9;
+const THETA_THRESHOLD: f32 = 0.9;
 
-const GRAVITY: f64 = 6.6743e-10; // m^3 / (kg s^2)
-const DSCALE: f64 = 1e18; // distance scaling w.r.t. pixels. average distance between stars in milky way is 5 light years, or 4.73e16 meters
-const SIM_STEP: f64 = 1e15; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
+const GRAVITY: f32 = 1e-10; // m^3 / (kg s^2)
+const DSCALE: f32 = 1.0; // distance scaling w.r.t. pixels. average distance between stars in milky way is 5 light years, or 4.73e16 meters
+const SIM_STEP: f32 = 1.0; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
 
-const FPS: f64 = 30.0;
+const FPS: f64 = 60.0;
 const TIME_STEP: f64 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
 
 const NUM_PARTICLES: u32 = 10000;
-const AVG_PARTICLE_MASS: f64 = 1e31; // mass of sun is around 2e30 kg
-const PARTICLE_MAG_VARIATION: f64 = 1.1;
+const AVG_PARTICLE_MASS: f32 = 1e5; // mass of sun is around 2e30 kg
+const PARTICLE_MAG_VARIATION: f32 = 1.10;
 
-const VEL_VARIATION: f64 = 0.05;
-const GALAXY_WIDTH_SCALE: f64 = 0.20;
-const GALAXY_HEIGHT_SCALE: f64 = 2.;
+const VEL_VARIATION: f32 = 0.1;
+const GALAXY_WIDTH_SCALE: f32 = 0.3;
+const GALAXY_HEIGHT_SCALE: f32 = 0.6;
+
+const SPAWN_BLACKHOLES: bool = true;
+const BLACK_HOLE_REL_MASS: f32 = 1e4;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f64 = DSCALE;
-const MIN_R2: f64 = MIN_R*MIN_R;
+const MIN_R: f32 = 0.5 * DSCALE;
+const MIN_R2: f32 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
-const MIN_QUADRANT_LENGTH: f64 = 0.000001 * DSCALE;
+const MIN_QUADRANT_LENGTH: f32 = 0.004;
 
 
 #[derive(Component)]
 struct Pose {
-    r: DVec2,
-    v: DVec2
+    r: Vec2,
+    v: Vec2,
+    prev: Option<PrevStep>
+}
+
+struct PrevStep {
+    v: Vec2,
+    a: Vec2
 }
 
 #[derive(Component)]
-struct Mass(f64);
+struct Mass(f32);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 enum AppState {
@@ -71,7 +80,7 @@ fn main() {
         .add_startup_system(setup)
         .add_system_set(
             SystemSet::new()
-            .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+            .with_run_criteria(FixedTimestep::step(TIME_STEP))
             .with_system(update)
         )
         //.add_system_set(SystemSet::on_update(AppState::Running).with_system(update))
@@ -104,25 +113,37 @@ fn setup(
     let window = windows.get_primary().unwrap();
     commands.spawn(Camera2dBundle::default());
 
-    let w = window.width() as f64 * DSCALE;
+    let w = window.width() * DSCALE;
     spawn_galaxy(
         &mut commands,
         &mut meshes,
         &mut materials,
-        NUM_PARTICLES / 2,
+        NUM_PARTICLES,
         w * GALAXY_WIDTH_SCALE,
-        DVec2::new(w / 8.0, w / 8.0),
-        DVec2::new(0., -0.001)
+        Vec2::new(0.0, 0.0),
+        Vec2::new(0.0, 0.0),
+        1.0
     );
-    spawn_galaxy(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        NUM_PARTICLES / 2,
-        w * GALAXY_WIDTH_SCALE,
-        DVec2::new(-w / 8.0, -w / 8.0),
-        DVec2::new(0., 0.001)
-    );
+    //spawn_galaxy(
+    //    &mut commands,
+    //    &mut meshes,
+    //    &mut materials,
+    //    NUM_PARTICLES / 2,
+    //    w * GALAXY_WIDTH_SCALE,
+    //    Vec2::new(w / 5.0, 0.0),
+    //    Vec2::new(0., -0.015),
+    //    1.0
+    //);
+    //spawn_galaxy(
+    //    &mut commands,
+    //    &mut meshes,
+    //    &mut materials,
+    //    NUM_PARTICLES / 2,
+    //    w * GALAXY_WIDTH_SCALE,
+    //    Vec2::new(-w / 5.0, 0.0),
+    //    Vec2::new(0., 0.015),
+    //    1.0
+    //);
 }
 
 fn spawn_galaxy(
@@ -130,35 +151,52 @@ fn spawn_galaxy(
     mut meshes: &mut ResMut<Assets<Mesh>>,
     mut materials: &mut ResMut<Assets<ColorMaterial>>,
     num_particles: u32,
-    diameter: f64,
-    gpos: DVec2,
-    gvel: DVec2
+    diameter: f32,
+    gpos: Vec2,
+    gvel: Vec2,
+    rotation: f32
 ) {
-    let gmass = (num_particles as f64) * AVG_PARTICLE_MASS;
+    let bmass = AVG_PARTICLE_MASS * BLACK_HOLE_REL_MASS;
+    let mut gmass = (num_particles as f32) * AVG_PARTICLE_MASS;
+    if SPAWN_BLACKHOLES { 
+        gmass += bmass;
+    }
+
+    let mut rng = rand::thread_rng();
+    let mdist = Uniform::new(AVG_PARTICLE_MASS / PARTICLE_MAG_VARIATION, AVG_PARTICLE_MASS * PARTICLE_MAG_VARIATION);
     for _ in 0..num_particles {
         let (r, theta, pos) = random_circle_pos(diameter);
-        let vel = random_orbital_circle_vel(r, theta, diameter*GALAXY_HEIGHT_SCALE, gmass);
-        spawn_particle(&mut commands, &mut meshes, &mut materials, pos + gpos, vel + gvel);
+        let vel = random_orbital_circle_vel(r, theta, diameter * GALAXY_HEIGHT_SCALE, gmass, rotation);
+        let mass = rng.sample(mdist);
+        let color = RandomColor::new().hue(random_color::Color::Blue).to_rgb_array();
+        
+        spawn_particle(&mut commands, &mut meshes, &mut materials, pos + gpos, vel + gvel, mass, Color::rgb_u8(color[0], color[1], color[2]));
+    }
+
+    // spawn black hole
+    if SPAWN_BLACKHOLES {
+        spawn_particle(&mut commands, &mut meshes, &mut materials, gpos, gvel, AVG_PARTICLE_MASS * BLACK_HOLE_REL_MASS, Color::WHITE);
     }
 }
 
-fn random_circle_pos(diameter: f64) -> (f64, f64, DVec2)
+fn random_circle_pos(diameter: f32) -> (f32, f32, Vec2)
 {
     let mut rng = rand::thread_rng();
-    let dist = Uniform::new(0., 1.);
-    let r = diameter / 2.0 * rng.sample(dist);
+    let dist = Uniform::new(2.0*MIN_R, diameter / 2.0);
+    let r = rng.sample(dist);
     let theta = rng.sample(dist) * 2. * 3.1415927;
-    (r, theta, DVec2::new(r*theta.cos(), r*theta.sin()))
+    (r, theta, Vec2::new(r*theta.cos(), r*theta.sin()))
 }
 
-fn random_orbital_circle_vel(r: f64, theta: f64, scale_height: f64, total_mass: f64) -> DVec2
+fn random_orbital_circle_vel(r: f32, theta: f32, scale_height: f32, total_mass: f32, rotation: f32) -> Vec2
 {
     let mut rng = rand::thread_rng();
+    let r = r + MIN_R;
     let grav = GRAVITY * total_mass / (r * r + scale_height * scale_height).sqrt();
     let v = (2.0 * grav).sqrt();
-    DVec2::new(
-        v*theta.sin() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION),
-        -v*theta.cos() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION)
+    Vec2::new(
+        rotation*v*theta.sin() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION),
+        rotation*-v*theta.cos() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION)
     )
 }
 
@@ -166,21 +204,20 @@ fn spawn_particle(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
-    pos: DVec2,
-    vel: DVec2,
+    pos: Vec2,
+    vel: Vec2,
+    mass: f32,
+    color: Color
 ) {
-    let color = RandomColor::new().hue(random_color::Color::Blue).to_rgb_array();
-    let mut rng = rand::thread_rng();
-    let mdist = Uniform::new(AVG_PARTICLE_MASS / PARTICLE_MAG_VARIATION, AVG_PARTICLE_MASS * PARTICLE_MAG_VARIATION);
     commands.spawn((
         MaterialMesh2dBundle {
             mesh: meshes.add(shape::Circle::new(1.0).into()).into(),
-            material: materials.add(ColorMaterial::from(Color::rgb_u8(color[0], color[1], color[2]))),
-            transform: Transform::from_translation(Vec3::new(pos.x as f32, pos.y as f32, 0.) / DSCALE as f32),
+            material: materials.add(color.into()),
+            transform: Transform::from_translation(Vec3::new(pos.x, pos.y, 0.) / DSCALE),
             ..default()
         },
-        Pose {r: pos, v: vel},
-        Mass(rng.sample(mdist))
+        Pose {r: pos, v: vel, prev: None},
+        Mass(mass)
     ));
 }
 
@@ -189,10 +226,10 @@ fn update(
     par_commands: ParallelCommands,
     mut particle_query: Query<(&mut Transform, Entity, &mut Pose, &Mass)>
 ) {
-    let window = windows.get_primary().unwrap();
+    let bounds = OUT_OF_BOUNDS * windows.get_primary().unwrap().width();
 
     // each cycle, we build the quad-tree out of the particles
-    let mut tree = BHTree::new(Quadrant::new(OUT_OF_BOUNDS * window.width() as f64 * DSCALE));
+    let mut tree = BHTree::new(Quadrant::new(bounds * DSCALE));
     for (_, particle, pose, mass) in &particle_query {
         tree.insert(particle, Body::new(mass, pose.r))
     }
@@ -203,18 +240,29 @@ fn update(
         // TODO avoid recreating Body in each loop
         let accel = tree.get_force(&particle, &Body::new(mass, pose.r)) / mass_f;
         let t = SIM_STEP;
-        let v_i = pose.v;
-        let dv = accel * t;
-        pose.r += (v_i + 0.5 * dv) * t;
-        pose.v += dv;
+        
+        if let Some(prev) = &pose.prev {
+            // Two-step Adams-Bashforth integration
+            let dv = 3.0 * pose.v - prev.v;
+            let da = 3.0 * accel - prev.a;
+            pose.r += 0.5 * t * dv;
+            pose.v += 0.5 * t * da;
+        } else {
+            // On first time-step, use standard kinematics propagation
+            let v_i = pose.v;
+            let dv = accel * t;
+            pose.r += (v_i + 0.5 * dv) * t;
+            pose.v += dv;
+        }
+        pose.prev = Some(PrevStep {v: pose.v, a: accel });
 
         // set actual rendering position
-        transform.translation.x = (pose.r.x / DSCALE) as f32;
-        transform.translation.y = (pose.r.y / DSCALE) as f32;
+        transform.translation.x = pose.r.x / DSCALE;
+        transform.translation.y = pose.r.y / DSCALE;
 
         // despawn particles that go out of bounds (The other option is to crash! :P or simulate far outside of bounds so they can come back)
-        if (transform.translation.x.abs() >= window.width() / 2.0 * OUT_OF_BOUNDS as f32 - 1.0)
-        || (transform.translation.y.abs() >= window.width() / 2.0 * OUT_OF_BOUNDS as f32 - 1.0)
+        if (transform.translation.x.abs() >= bounds / 2.0 - 1.0)
+        || (transform.translation.y.abs() >= bounds / 2.0 - 1.0)
         {
             par_commands.command_scope(|mut commands| {
                 commands.entity(particle).despawn();
@@ -228,19 +276,19 @@ enum Corner {NW, NE, SW, SE}
 
 #[derive(Default, Debug)]
 struct Quadrant {
-    center: DVec2,
-    len: f64
+    center: Vec2,
+    len: f32
 }
 
 impl Quadrant {
-    fn new(length: f64) -> Self {
+    fn new(length: f32) -> Self {
         Quadrant {
             len: length,
-            center: DVec2::new(0., 0.)
+            center: Vec2::new(0., 0.)
         }
     }
     /// return true if this Quadrant contains (x,y)
-    fn contains(&self, x: f64, y: f64) -> bool {
+    fn contains(&self, x: f32, y: f32) -> bool {
         let hl = self.len / 2.0;
         (x >= self.center.x - hl) && (x < self.center.x + hl) && (y >= self.center.y - hl) && (y < self.center.y + hl)
     }
@@ -249,10 +297,10 @@ impl Quadrant {
         let hl = self.len / 2.0;
         let ql = hl / 2.0;
         match corner {
-            Corner::NW => Quadrant {center: DVec2::new(self.center.x - ql, self.center.y + ql), len: hl},
-            Corner::NE => Quadrant {center: DVec2::new(self.center.x + ql, self.center.y + ql), len: hl},
-            Corner::SW => Quadrant {center: DVec2::new(self.center.x - ql, self.center.y - ql), len: hl},
-            Corner::SE => Quadrant {center: DVec2::new(self.center.x + ql, self.center.y - ql), len: hl}
+            Corner::NW => Quadrant {center: Vec2::new(self.center.x - ql, self.center.y + ql), len: hl},
+            Corner::NE => Quadrant {center: Vec2::new(self.center.x + ql, self.center.y + ql), len: hl},
+            Corner::SW => Quadrant {center: Vec2::new(self.center.x - ql, self.center.y - ql), len: hl},
+            Corner::SE => Quadrant {center: Vec2::new(self.center.x + ql, self.center.y - ql), len: hl}
         }
     }
 }
@@ -312,7 +360,7 @@ impl BHTree
         }
     }
 
-    fn get_force(&self, p: &Entity, b: &Body) -> DVec2 {
+    fn get_force(&self, p: &Entity, b: &Body) -> Vec2 {
         if let Some(current_node) = &self.node {
             match &current_node.item {
                 NodeItem::Internal(subquad) => {
@@ -330,13 +378,13 @@ impl BHTree
                         b.force(&current_node.body)
                     } else {
                         // index was the same, this is the same particle
-                        DVec2::new(0., 0.)
+                        Vec2::new(0., 0.)
                     }
                 }
             }
         } else {
             // there's no body at self, so there's no force
-            DVec2::new(0., 0.)
+            Vec2::new(0., 0.)
         }
     }
 }
@@ -359,17 +407,17 @@ impl SubQuadrants {
         }
     }
 
-    fn get_force(&self, p: &Entity, b: &Body) -> DVec2 {
+    fn get_force(&self, p: &Entity, b: &Body) -> Vec2 {
         self.nw.get_force(p, b) + self.ne.get_force(p, b) + self.sw.get_force(p, b) + self.se.get_force(p, b)
     }
 
     fn insert_to_quadrant(&mut self, p: Entity, b: Body) {
         // this is an internal node, we must have a subtree
         match b {
-            b if b.within(&self.nw.quad) => self.nw.insert(p, b),
-            b if b.within(&self.ne.quad) => self.ne.insert(p, b),
-            b if b.within(&self.sw.quad) => self.sw.insert(p, b),
-            b if b.within(&self.se.quad) => self.se.insert(p, b),
+            b if self.nw.quad.contains(b.pos.x, b.pos.y) => self.nw.insert(p, b),
+            b if self.ne.quad.contains(b.pos.x, b.pos.y) => self.ne.insert(p, b),
+            b if self.sw.quad.contains(b.pos.x, b.pos.y) => self.sw.insert(p, b),
+            b if self.se.quad.contains(b.pos.x, b.pos.y) => self.se.insert(p, b),
             b => panic!("position {}, {} was not in any quadrant?\n {:#?}, {:#?}, {:#?}, {:#?}", b.pos.x, b.pos.y, self.nw.quad, self.ne.quad, self.sw.quad, self.se.quad)
         }
     }
@@ -378,18 +426,14 @@ impl SubQuadrants {
 
 #[derive(Default, Clone, Copy)]
 struct Body {
-    mass: f64,
-    pos: DVec2,
+    mass: f32,
+    pos: Vec2,
 }
 
 impl Body {
-    fn new(mass: &Mass, pos: DVec2) -> Self {
+    fn new(mass: &Mass, pos: Vec2) -> Self {
         let Mass(mass) = *mass;
         Body {mass, pos}
-    }
-
-    fn within(&self, q: &Quadrant) -> bool {
-        q.contains(self.pos.x, self.pos.y)
     }
 
     fn add(&mut self, b: &Body) {
@@ -402,7 +446,7 @@ impl Body {
     }
 
     /// compute force on self from Body
-    fn force(&self, b: &Body) -> DVec2 {
+    fn force(&self, b: &Body) -> Vec2 {
         let dist2 = b.pos.distance_squared(self.pos);
         // protect against tiny floating point values, otherwise we get insane acceleration without collision detection
         // Barnes. "Gravitational softening as a smoothing operation"
