@@ -14,28 +14,28 @@ const WINDOW_SIZE: f32 = 1200.;
 const OUT_OF_BOUNDS: f32 = 2.0; // track particles this far out of bounds
 
 // http://arborjs.org/docs/barnes-hut
-const THETA_THRESHOLD: f32 = 0.8;
+const THETA_THRESHOLD: f32 = 0.7;
 
 const GRAVITY: f32 = 1e-10; // m^3 / (kg s^2)
 const DSCALE: f32 = 1.0; // distance scaling w.r.t. pixels. average distance between stars in milky way is 5 light years, or 4.73e16 meters
-const SIM_STEP: f32 = 1.0; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
+const SIM_STEP: f32 = 0.001; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
 
 const FPS: f64 = 60.0;
 const TIME_STEP: f64 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
 
 const NUM_PARTICLES: u32 = 10000;
-const AVG_PARTICLE_MASS: f32 = 1e5; // mass of sun is around 2e30 kg
-const PARTICLE_MAG_VARIATION: f32 = 1.1;
+const AVG_PARTICLE_MASS: f32 = 1e9; // mass of sun is around 2e30 kg
+const PARTICLE_MAG_VARIATION: f32 = 100.0;
 
-const VEL_VARIATION: f32 = 0.05;
-const GALAXY_WIDTH_SCALE: f32 = 0.3;
-const GALAXY_HEIGHT_SCALE: f32 = 0.5;
+const VEL_VARIATION: f32 = 2.0;
+const GALAXY_WIDTH_SCALE: f32 = 0.6;
+const GALAXY_SCALE_FACTOR: f32 = 0.9;
 
 const SPAWN_BLACKHOLES: bool = true;
-const BLACK_HOLE_REL_MASS: f32 = 1e4;
+const BLACK_HOLE_REL_MASS: f32 = 10.0;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f32 = 1.0 * DSCALE;
+const MIN_R: f32 = 0.1 * DSCALE;
 const MIN_R2: f32 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
@@ -46,12 +46,7 @@ const MIN_QUADRANT_LENGTH: f32 = 0.004;
 struct Pose {
     r: Vec2,
     v: Vec2,
-    prev: Option<PrevStep>
-}
-
-struct PrevStep {
-    v: Vec2,
-    a: Vec2
+    prev_accel: Option<Vec2>
 }
 
 #[derive(Component)]
@@ -114,16 +109,17 @@ fn setup(
     commands.spawn(Camera2dBundle::default());
 
     let w = window.width() * DSCALE;
-    //spawn_galaxy(
-    //    &mut commands,
-    //    &mut meshes,
-    //    &mut materials,
-    //    NUM_PARTICLES,
-    //    w * GALAXY_WIDTH_SCALE,
-    //    Vec2::new(0.0, 0.0),
-    //    Vec2::new(0.0, 0.0),
-    //    1.0
-    //);
+    spawn_galaxy(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        NUM_PARTICLES,
+        w * GALAXY_WIDTH_SCALE,
+        Vec2::new(0.0, 0.0),
+        Vec2::new(0.0, 0.0),
+        1.0
+    );
+    /*
     spawn_galaxy(
         &mut commands,
         &mut meshes,
@@ -144,6 +140,7 @@ fn setup(
         Vec2::new(0., 0.015),
         1.0
     );
+    */
 }
 
 fn spawn_galaxy(
@@ -156,7 +153,7 @@ fn spawn_galaxy(
     gvel: Vec2,
     rotation: f32
 ) {
-    let bmass = AVG_PARTICLE_MASS * BLACK_HOLE_REL_MASS;
+    let bmass = AVG_PARTICLE_MASS * BLACK_HOLE_REL_MASS * num_particles as f32;
     let mut gmass = (num_particles as f32) * AVG_PARTICLE_MASS;
     if SPAWN_BLACKHOLES { 
         gmass += bmass;
@@ -166,7 +163,8 @@ fn spawn_galaxy(
     let mdist = Uniform::new(AVG_PARTICLE_MASS / PARTICLE_MAG_VARIATION, AVG_PARTICLE_MASS * PARTICLE_MAG_VARIATION);
     for _ in 0..num_particles {
         let (r, theta, pos) = random_circle_pos(diameter);
-        let vel = random_orbital_circle_vel(r, theta, diameter * GALAXY_HEIGHT_SCALE, gmass, rotation);
+        let scale_r2 = (diameter * GALAXY_SCALE_FACTOR).powi(2);
+        let vel = random_orbital_circle_vel(r, theta, scale_r2, gmass, rotation);
         let mass = rng.sample(mdist);
         let color = RandomColor::new().hue(random_color::Color::Blue).to_rgb_array();
         
@@ -182,17 +180,17 @@ fn spawn_galaxy(
 fn random_circle_pos(diameter: f32) -> (f32, f32, Vec2)
 {
     let mut rng = rand::thread_rng();
-    let dist = Uniform::new(2.0*MIN_R, diameter / 2.0);
-    let r = rng.sample(dist);
+    let dist = Uniform::new(0.0, 1.0_f32);
+    let r = (diameter / 2.0) * rng.sample(dist).sqrt();
     let theta = rng.sample(dist) * 2. * 3.1415927;
     (r, theta, Vec2::new(r*theta.cos(), r*theta.sin()))
 }
 
-fn random_orbital_circle_vel(r: f32, theta: f32, scale_height: f32, total_mass: f32, rotation: f32) -> Vec2
+fn random_orbital_circle_vel(r: f32, theta: f32, scale_r2: f32, total_mass: f32, rotation: f32) -> Vec2
 {
     let mut rng = rand::thread_rng();
     let r = r + MIN_R;
-    let grav = GRAVITY * total_mass / (r * r + scale_height * scale_height).sqrt();
+    let grav = GRAVITY * total_mass / (r * r + scale_r2).sqrt();
     let v = (2.0 * grav).sqrt();
     Vec2::new(
         rotation*v*theta.sin() + v * rng.gen_range(-VEL_VARIATION..VEL_VARIATION),
@@ -216,7 +214,7 @@ fn spawn_particle(
             transform: Transform::from_translation(Vec3::new(pos.x, pos.y, 0.) / DSCALE),
             ..default()
         },
-        Pose {r: pos, v: vel, prev: None},
+        Pose {r: pos, v: vel, prev_accel: None},
         Mass(mass)
     ));
 }
@@ -241,20 +239,13 @@ fn update(
         let accel = tree.get_force(&particle, &Body::new(mass, pose.r)) / mass_f;
         let t = SIM_STEP;
         
-        if let Some(prev) = &pose.prev {
-            // Two-step Adams-Bashforth integration
-            let dv = 3.0 * pose.v - prev.v;
-            let da = 3.0 * accel - prev.a;
-            pose.r += 0.5 * t * dv;
-            pose.v += 0.5 * t * da;
-        } else {
-            // On first time-step, use standard kinematics propagation
-            let v_i = pose.v;
-            let dv = accel * t;
-            pose.r += (v_i + 0.5 * dv) * t;
-            pose.v += dv;
+        // https://en.wikipedia.org/wiki/Leapfrog_integration
+        let dv = accel * t;
+        if let Some(prev) = pose.prev_accel {
+            pose.v += 0.5 * (prev * SIM_STEP + dv);
         }
-        pose.prev = Some(PrevStep {v: pose.v, a: accel });
+        pose.r = pose.r + (pose.v + 0.5 * dv) * t;
+        pose.prev_accel = Some(accel);
 
         // set actual rendering position
         transform.translation.x = pose.r.x / DSCALE;
