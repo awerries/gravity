@@ -14,7 +14,7 @@ const WINDOW_SIZE: f32 = 1200.;
 const OUT_OF_BOUNDS: f32 = 2.0; // track particles this far out of bounds
 
 // http://arborjs.org/docs/barnes-hut
-const THETA_THRESHOLD: f32 = 0.9;
+const THETA_THRESHOLD: f32 = 0.8;
 
 const GRAVITY: f32 = 1e-10; // m^3 / (kg s^2)
 const DSCALE: f32 = 1.0; // distance scaling w.r.t. pixels. average distance between stars in milky way is 5 light years, or 4.73e16 meters
@@ -25,17 +25,17 @@ const TIME_STEP: f64 = 1.0/FPS; // how often bevy will attempt to run the sim, i
 
 const NUM_PARTICLES: u32 = 10000;
 const AVG_PARTICLE_MASS: f32 = 1e5; // mass of sun is around 2e30 kg
-const PARTICLE_MAG_VARIATION: f32 = 1.10;
+const PARTICLE_MAG_VARIATION: f32 = 1.1;
 
-const VEL_VARIATION: f32 = 0.1;
+const VEL_VARIATION: f32 = 0.05;
 const GALAXY_WIDTH_SCALE: f32 = 0.3;
-const GALAXY_HEIGHT_SCALE: f32 = 0.6;
+const GALAXY_HEIGHT_SCALE: f32 = 0.5;
 
 const SPAWN_BLACKHOLES: bool = true;
 const BLACK_HOLE_REL_MASS: f32 = 1e4;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f32 = 0.5 * DSCALE;
+const MIN_R: f32 = 1.0 * DSCALE;
 const MIN_R2: f32 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
@@ -114,36 +114,36 @@ fn setup(
     commands.spawn(Camera2dBundle::default());
 
     let w = window.width() * DSCALE;
+    //spawn_galaxy(
+    //    &mut commands,
+    //    &mut meshes,
+    //    &mut materials,
+    //    NUM_PARTICLES,
+    //    w * GALAXY_WIDTH_SCALE,
+    //    Vec2::new(0.0, 0.0),
+    //    Vec2::new(0.0, 0.0),
+    //    1.0
+    //);
     spawn_galaxy(
         &mut commands,
         &mut meshes,
         &mut materials,
-        NUM_PARTICLES,
+        NUM_PARTICLES / 2,
         w * GALAXY_WIDTH_SCALE,
-        Vec2::new(0.0, 0.0),
-        Vec2::new(0.0, 0.0),
+        Vec2::new(w / 5.0, 0.0),
+        Vec2::new(0., -0.015),
         1.0
     );
-    //spawn_galaxy(
-    //    &mut commands,
-    //    &mut meshes,
-    //    &mut materials,
-    //    NUM_PARTICLES / 2,
-    //    w * GALAXY_WIDTH_SCALE,
-    //    Vec2::new(w / 5.0, 0.0),
-    //    Vec2::new(0., -0.015),
-    //    1.0
-    //);
-    //spawn_galaxy(
-    //    &mut commands,
-    //    &mut meshes,
-    //    &mut materials,
-    //    NUM_PARTICLES / 2,
-    //    w * GALAXY_WIDTH_SCALE,
-    //    Vec2::new(-w / 5.0, 0.0),
-    //    Vec2::new(0., 0.015),
-    //    1.0
-    //);
+    spawn_galaxy(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        NUM_PARTICLES / 2,
+        w * GALAXY_WIDTH_SCALE,
+        Vec2::new(-w / 5.0, 0.0),
+        Vec2::new(0., 0.015),
+        1.0
+    );
 }
 
 fn spawn_galaxy(
