@@ -19,14 +19,14 @@ const THETA_THRESHOLD: f32 = 1.0;
 const GRAVITY: f32 = 1.0; // m^3 / (kg s^2)
 const NEGATIVE_MASS: f32 = 0.; // apply expansion factor
 const DSCALE: f32 = 1.0; // distance scaling w.r.t. pixels. average distance between stars in milky way is 5 light years, or 4.73e16 meters
-const SIM_STEP: f32 = 0.0001; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
+const SIM_STEP: f32 = 0.00001; // time of each sim step, in seconds. 1e12 seconds is 31.7k years. takes 230million years for sun to get around milky way.
 
-const FPS: f64 = 60.0;
+const FPS: f64 = 30.0;
 const TIME_STEP: f64 = 1.0/FPS; // how often bevy will attempt to run the sim, in seconds
 
-const NUM_PARTICLES: u32 = 10000;
+const NUM_PARTICLES: u32 = 15000;
 const PARTICLE_MASS_LOWER: f32 = 1.0;
-const PARTICLE_MASS_UPPER: f32 = 1000.0;
+const PARTICLE_MASS_UPPER: f32 = 1e3;
 const AVG_PARTICLE_MASS: f32 = (PARTICLE_MASS_LOWER + PARTICLE_MASS_UPPER) / 2.0;
 
 const VEL_VARIATION: f32 = 0.1;
@@ -34,10 +34,10 @@ const GALAXY_WIDTH_SCALE: f32 = 0.9;
 const GALAXY_SCALE_FACTOR: f32 = 0.0;
 
 const SPAWN_BLACKHOLES: bool = true;
-const BLACK_HOLE_REL_MASS: f32 = 1e6;
+const BLACK_HOLE_REL_MASS: f32 = 1e8;
 
 // Minimum radius to guard against gravity singularity
-const MIN_R: f32 = 0.5 * DSCALE;
+const MIN_R: f32 = 0.1 * DSCALE;
 const MIN_R2: f32 = MIN_R*MIN_R;
 
 // Min grid size to protect against floating point division errors
@@ -126,9 +126,9 @@ fn update(
         // apply "external mass"
         if NEGATIVE_MASS > 0. {
             let rmag = pose.r.length();
-             if rmag > 0. {
+            if rmag > 0. {
                 accel += GRAVITY * NEGATIVE_MASS * pose.r.normalize_or_zero() / rmag;
-             }
+            }
         }
         
         // https://en.wikipedia.org/wiki/Leapfrog_integration

@@ -1,7 +1,5 @@
 use rand::Rng;
 use rand::distributions::Uniform;
-use random_color;
-use random_color::RandomColor;
 use colorgrad;
 
 use bevy::{
@@ -86,8 +84,8 @@ fn spawn_galaxy(
     gvel: Vec2,
     rotation: f32
 ) {
-    let bmass = crate::AVG_PARTICLE_MASS * crate::BLACK_HOLE_REL_MASS;
-    let mut gmass = (num_particles as f32) * crate::AVG_PARTICLE_MASS;
+    let bmass = crate::PARTICLE_MASS_LOWER * crate::BLACK_HOLE_REL_MASS;
+    let mut gmass = 0.; // previously: (num_particles as f32) * crate::AVG_PARTICLE_MASS;
     if crate::SPAWN_BLACKHOLES { 
         gmass += bmass;
     }
@@ -121,7 +119,7 @@ fn spawn_galaxy(
             0.0,
             gpos,
             gvel,
-            crate::AVG_PARTICLE_MASS * crate::BLACK_HOLE_REL_MASS,
+            bmass,
             Color::DARK_GRAY
         );
     }
@@ -139,7 +137,7 @@ fn get_star_color(mass: f32) -> Color
 fn random_circle_pos(diameter: f32) -> (f32, f32, Vec2)
 {
     let mut rng = rand::thread_rng();
-    let rdist = Uniform::new(0.0001, 1.0_f32);
+    let rdist = Uniform::new(0.00001, 1.0_f32);
     let r = (diameter / 2.0) * rng.sample(rdist).sqrt();
 
     let theta_dist = Uniform::new(0., 2.0 * std::f32::consts::PI);
