@@ -8,9 +8,9 @@ edition = "2021"
 [dependencies]
 bevy = { version = "0.9.1", features = ["dynamic"] }
 bevy-inspector-egui = "0.17.0"
+colorgrad = "0.6.2"
 glam = "0.23.0"
 rand = "0.8.5"
-random_color = "0.6.1"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]
