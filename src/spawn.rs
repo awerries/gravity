@@ -16,16 +16,35 @@ pub fn setup(
     let window = windows.get_primary().unwrap();
     commands.spawn(Camera2dBundle::default());
 
+    let size_factor = 5;
+    let f2 = size_factor * size_factor;
     
     let w = window.width() * crate::DSCALE;
+    let parent_particles = crate::NUM_PARTICLES * (f2 - 1) / f2;
+    let child_particles = crate::NUM_PARTICLES / f2;
     spawn_galaxy(
         &mut commands,
         &mut meshes,
         &mut materials,
-        crate::NUM_PARTICLES,
+        crate::NUM_PARTICLES * (f2 - 1) / f2,
         w * crate::GALAXY_WIDTH_SCALE,
         Vec2::new(0.0, 0.0),
         Vec2::new(0.0, 0.0),
+        1.0
+    );
+    
+    let y_offset = w * crate::DSCALE / 5.0;
+    let bmass = crate::PARTICLE_MASS_LOWER * parent_particles as f32 * crate::BLACK_HOLE_REL_MASS;
+    let v = (crate::GRAVITY * bmass / (y_offset * y_offset).sqrt()).sqrt();
+    let v = v / 2.0; // skewed velocity to make it elliptical
+    spawn_galaxy(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        child_particles,
+        w * crate::GALAXY_WIDTH_SCALE / size_factor as f32,
+        Vec2::new(0.0, y_offset),
+        Vec2::new(v, 0.0),
         1.0
     );
     
@@ -84,7 +103,7 @@ fn spawn_galaxy(
     gvel: Vec2,
     rotation: f32
 ) {
-    let bmass = crate::PARTICLE_MASS_LOWER * crate::BLACK_HOLE_REL_MASS;
+    let bmass = crate::PARTICLE_MASS_LOWER * num_particles as f32 * crate::BLACK_HOLE_REL_MASS;
     let mut gmass = 0.; // previously: (num_particles as f32) * crate::AVG_PARTICLE_MASS;
     if crate::SPAWN_BLACKHOLES { 
         gmass += bmass;
